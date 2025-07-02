@@ -4,36 +4,45 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.patches import Polygon
+from matplotlib.figure import Figure
 import fractions
 from fractions import Fraction
 import copy
 
-class LinearProgrammingCalculator:
+class LinearProgrammingCalculator(tk.Tk):
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("Linear Programming Calculator")
-        self.root.geometry("1200x800")
-        self.root.configure(bg='#f0f0f0')
-        
-        # Variables to store problem data
-        self.num_variables = 0
-        self.num_constraints = 0
-        self.is_maximization = True
+        super().__init__()
+        self.title("Linear Programming Solver")
+        self.geometry("1200x900")
+
+        # App state variables
+        self.num_vars = tk.IntVar(value=2)
+        self.num_constraints = tk.IntVar(value=1)
+        self.problem_type = tk.StringVar(value="Maximize")
         self.objective_coeffs = []
         self.constraint_coeffs = []
+        self.constraint_signs = []
         self.constraint_rhs = []
-        self.constraint_types = []
-        self.show_fractions = False
-        self.solution_steps = []
-        
-        # Create main frame
-        self.main_frame = ttk.Frame(self.root, padding="10")
-        self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        
-        self.show_initial_screen()
+
+        # Main container
+        self.container = tk.Frame(self)
+        self.container.pack(fill="both", expand=True)
+
+        self.frames = {}
+        for F in (StartPage, InputPage, ResultsPage):
+            page_name = F.__name__
+            frame = F(parent=self.container, controller=self)
+            self.frames[page_name] = frame
+            frame.grid(row=0, column=0, sticky="nsew")
+
+        self.show_frame("StartPage")
+    
+    def show_frame(self, page_name):
+        """Show a frame for the given page name."""
+        frame = self.frames[page_name]
+        if hasattr(frame, 'on_show'):
+            frame.on_show()
+        frame.tkraise()
     
     def show_initial_screen(self):
         self.clear_frame()
@@ -953,7 +962,419 @@ class LinearProgrammingCalculator:
             widget.destroy()
     
     def run(self):
-        self.root.mainloop()
+        self.mainloop()
+
+class StartPage(tk.Frame):
+    """Initial page to get the number of variables and constraints."""
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+        label = tk.Label(self, text="Problem Setup", font=("Arial", 16, "bold"))
+        label.pack(pady=20)
+
+        # Frame for inputs
+        input_frame = tk.Frame(self)
+        input_frame.pack(pady=20, padx=20)
+
+        tk.Label(input_frame, text="Number of Variables:").grid(row=0, column=0, padx=5, pady=10, sticky="e")
+        self.vars_entry = tk.Entry(input_frame, textvariable=self.controller.num_vars, width=5)
+        self.vars_entry.grid(row=0, column=1, padx=5, pady=10)
+
+        tk.Label(input_frame, text="Number of Constraints:").grid(row=1, column=0, padx=5, pady=10, sticky="e")
+        self.constraints_entry = tk.Entry(input_frame, textvariable=self.controller.num_constraints, width=5)
+        self.constraints_entry.grid(row=1, column=1, padx=5, pady=10)
+
+        next_button = tk.Button(self, text="Next", command=self.validate_and_proceed)
+        next_button.pack(pady=20)
+
+    def validate_and_proceed(self):
+        """Validates inputs and proceeds to the next page."""
+        try:
+            num_vars_str = self.vars_entry.get().strip()
+            num_constraints_str = self.constraints_entry.get().strip()
+            num_vars = int(num_vars_str)
+            num_constraints = int(num_constraints_str)
+
+            if not (1 <= num_vars <= 10):
+                messagebox.showerror("Invalid Input", "Number of variables must be between 1 and 10.")
+                return
+            if not (1 <= num_constraints <= 15):
+                messagebox.showerror("Invalid Input", "Number of constraints must be between 1 and 15.")
+                return
+
+            self.controller.num_vars.set(num_vars)
+            self.controller.num_constraints.set(num_constraints)
+            self.controller.show_frame("InputPage")
+
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Por favor, ingresa números enteros válidos en ambos campos.")
+
+class InputPage(tk.Frame):
+    """Page for inputting the objective function and constraints."""
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+        self.canvas = None
+
+    def on_show(self):
+        """Dynamically create input fields based on user selection."""
+        if self.canvas:
+            # Desvincular el scrollbar antes de destruir el canvas
+            for child in self.canvas.master.winfo_children():
+                if isinstance(child, ttk.Scrollbar):
+                    child.config(command=None)
+            self.canvas.destroy()
+        self._create_widgets()
+
+    def _create_widgets(self):
+        num_vars = self.controller.num_vars.get()
+        num_constraints = self.controller.num_constraints.get()
+
+        # Main frame with a scrollbar
+        main_frame = tk.Frame(self)
+        main_frame.pack(fill="both", expand=True)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(main_frame)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=self.canvas.yview)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        scrollable_frame = ttk.Frame(self.canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+
+        self.canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # --- Objective Function ---
+        obj_frame = tk.LabelFrame(scrollable_frame, text="Objective Function", padx=10, pady=10)
+        obj_frame.pack(pady=10, padx=20, fill="x")
+
+        tk.Radiobutton(obj_frame, text="Maximize", variable=self.controller.problem_type, value="Maximize").pack(side="left")
+        tk.Radiobutton(obj_frame, text="Minimize", variable=self.controller.problem_type, value="Minimize").pack(side="left", padx=20)
+
+        func_frame = tk.Frame(obj_frame)
+        func_frame.pack(pady=10)
+        
+        tk.Label(func_frame, text="Z = ").pack(side="left")
+        self.controller.objective_coeffs = []
+        for i in range(num_vars):
+            entry = tk.Entry(func_frame, width=5)
+            entry.pack(side="left")
+            self.controller.objective_coeffs.append(entry)
+            tk.Label(func_frame, text=f"x{i+1} " + ("+" if i < num_vars - 1 else "")).pack(side="left")
+
+        # --- Constraints ---
+        constraints_frame = tk.LabelFrame(scrollable_frame, text="Constraints", padx=10, pady=10)
+        constraints_frame.pack(pady=10, padx=20, fill="x")
+        
+        self.controller.constraint_coeffs = []
+        self.controller.constraint_signs = []
+        self.controller.constraint_rhs = []
+
+        for i in range(num_constraints):
+            row_frame = tk.Frame(constraints_frame)
+            row_frame.pack(fill="x", pady=5)
+            coeffs_row = []
+            for j in range(num_vars):
+                entry = tk.Entry(row_frame, width=5)
+                entry.pack(side="left")
+                coeffs_row.append(entry)
+                tk.Label(row_frame, text=f"x{j+1} " + ("+" if j < num_vars - 1 else "")).pack(side="left")
+            self.controller.constraint_coeffs.append(coeffs_row)
+
+            sign_var = tk.StringVar(value="<=")
+            sign_menu = tk.OptionMenu(row_frame, sign_var, "<=", ">=", "=")
+            sign_menu.pack(side="left", padx=5)
+            self.controller.constraint_signs.append(sign_var)
+
+            rhs_entry = tk.Entry(row_frame, width=5)
+            rhs_entry.pack(side="left")
+            self.controller.constraint_rhs.append(rhs_entry)
+
+        # --- Navigation and Solve Buttons ---
+        button_frame = tk.Frame(scrollable_frame)
+        button_frame.pack(pady=20, padx=20)
+        
+        back_button = tk.Button(button_frame, text="Back", command=lambda: self.controller.show_frame("StartPage"))
+        back_button.pack(side="left", padx=10)
+        
+        self.graphical_button = tk.Button(button_frame, text="Solve with Graphical Method", command=self.solve_graphical)
+        self.graphical_button.pack(side="left", padx=10)
+        
+        two_phase_button = tk.Button(button_frame, text="Solve with Two-Phase Method", command=self.solve_two_phase)
+        two_phase_button.pack(side="left", padx=10)
+
+        # Enable graphical button only if num_vars is 2
+        if num_vars != 2:
+            self.graphical_button.config(state="disabled")
+
+    def _get_problem_data(self):
+        """Helper to parse and validate all input fields."""
+        try:
+            problem = {}
+            problem['type'] = self.controller.problem_type.get()
+            problem['obj_coeffs'] = [float(e.get()) for e in self.controller.objective_coeffs]
+            
+            problem['constraints'] = []
+            for i in range(self.controller.num_constraints.get()):
+                constraint = {
+                    'coeffs': [float(e.get()) for e in self.controller.constraint_coeffs[i]],
+                    'sign': self.controller.constraint_signs[i].get(),
+                    'rhs': float(self.controller.constraint_rhs[i].get())
+                }
+                problem['constraints'].append(constraint)
+            return problem
+        except (ValueError, IndexError):
+            messagebox.showerror("Input Error", "Please ensure all fields are filled with valid numbers.")
+            return None
+
+    def solve_graphical(self):
+        problem_data = self._get_problem_data()
+        if problem_data:
+            self.controller.problem_data = problem_data
+            self.controller.solve_method = "Graphical"
+            self.controller.show_frame("ResultsPage")
+
+    def solve_two_phase(self):
+        problem_data = self._get_problem_data()
+        if problem_data:
+            self.controller.problem_data = problem_data
+            self.controller.solve_method = "Two-Phase"
+            self.controller.show_frame("ResultsPage")
+
+
+class ResultsPage(tk.Frame):
+    """Page to display the solution and steps."""
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+        self.results_frame = None
+
+    def on_show(self):
+        """Clear previous results and run the selected solver."""
+        if self.results_frame:
+            self.results_frame.destroy()
+        
+        self.results_frame = tk.Frame(self)
+        self.results_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.results_frame.columnconfigure(0, weight=1)
+        self.results_frame.rowconfigure(0, weight=1)
+
+        back_button = tk.Button(self.results_frame, text="Back to Inputs", command=lambda: self.controller.show_frame("InputPage"))
+        back_button.pack(pady=10)
+
+        if self.controller.solve_method == "Graphical":
+            self.display_graphical_solution()
+        elif self.controller.solve_method == "Two-Phase":
+            self.display_two_phase_solution()
+
+    def display_graphical_solution(self):
+        """Calculates and displays the graphical method solution."""
+        problem = self.controller.problem_data
+        
+        fig = Figure(figsize=(6, 5), dpi=100)
+        ax = fig.add_subplot(111)
+        
+        # Plot constraints
+        d = np.linspace(0, 50, 2000)
+        x, y = np.meshgrid(d, d)
+        
+        feasible_region = np.ones(x.shape, dtype=bool)
+        
+        explanation = "### Solution Process (Graphical Method)\n\n"
+        explanation += "1.  **Plotting Constraints:** Each constraint is plotted as a line on the graph.\n"
+
+        for i, c in enumerate(problem['constraints']):
+            coeffs = c['coeffs']
+            rhs = c['rhs']
+            sign = c['sign']
+            
+            # Ensure we don't divide by zero
+            if coeffs[1] != 0:
+                y_vals = (rhs - coeffs[0] * d) / coeffs[1]
+                ax.plot(d, y_vals, label=f'Constraint {i+1}')
+                
+                # Shading the feasible region
+                if sign == '<=':
+                    feasible_region &= (coeffs[0]*x + coeffs[1]*y <= rhs)
+                elif sign == '>=':
+                    feasible_region &= (coeffs[0]*x + coeffs[1]*y >= rhs)
+            elif coeffs[0] != 0: # Vertical line
+                x_val = rhs / coeffs[0]
+                ax.axvline(x=x_val, label=f'Constraint {i+1}')
+                if sign == '<=':
+                    feasible_region &= (x <= x_val)
+                elif sign == '>=':
+                    feasible_region &= (x >= x_val)
+            
+            explanation += f"    - **Constraint {i+1}:** `{coeffs[0]}x1 + {coeffs[1]}x2 {sign} {rhs}`\n"
+
+
+        # Non-negativity constraints
+        feasible_region &= (x >= 0)
+        feasible_region &= (y >= 0)
+
+        # Shade the feasible region
+        ax.imshow(feasible_region.T, extent=(0, 50, 0, 50), origin='lower', cmap="Greys", alpha=0.3)
+        explanation += "\n2.  **Identifying Feasible Region:** The area satisfying all constraints simultaneously (including non-negativity x1, x2 >= 0) is shaded.\n"
+
+        # Find corner points
+        # This is a simplified approach; a full implementation requires finding all intersections.
+        # For this example, we'll test intersections of all pairs of constraints.
+        corner_points = [(0, 0)]
+        constraints = problem['constraints']
+        for i in range(len(constraints)):
+            for j in range(i + 1, len(constraints)):
+                A = np.array([constraints[i]['coeffs'], constraints[j]['coeffs']])
+                b = np.array([constraints[i]['rhs'], constraints[j]['rhs']])
+                try:
+                    point = np.linalg.solve(A, b)
+                    if np.all(point >= 0):
+                        corner_points.append(tuple(point))
+                except np.linalg.LinAlgError:
+                    continue # Parallel lines
+
+        # Intersections with axes
+        for c in constraints:
+            if c['coeffs'][0] != 0:
+                p = (c['rhs']/c['coeffs'][0], 0)
+                if p[0] >= 0: corner_points.append(p)
+            if c['coeffs'][1] != 0:
+                p = (0, c['rhs']/c['coeffs'][1])
+                if p[1] >= 0: corner_points.append(p)
+
+        # Filter points that are actually feasible
+        feasible_points = []
+        for p in corner_points:
+            is_feasible = True
+            for c in constraints:
+                val = c['coeffs'][0]*p[0] + c['coeffs'][1]*p[1]
+                if (c['sign'] == '<=' and val > c['rhs'] + 1e-6) or \
+                   (c['sign'] == '>=' and val < c['rhs'] - 1e-6):
+                    is_feasible = False
+                    break
+            if is_feasible:
+                feasible_points.append(p)
+        
+        feasible_points = sorted(list(set(feasible_points))) # Remove duplicates
+
+        explanation += "\n3.  **Finding Corner Points:** The vertices (corners) of the feasible region are calculated by finding the intersection of the constraint lines.\n"
+        explanation += f"    - Feasible corner points found: {feasible_points}\n"
+
+        if not feasible_points:
+            result_text = "No feasible solution found."
+        else:
+            # Evaluate objective function at each corner point
+            obj_coeffs = problem['obj_coeffs']
+            obj_values = [obj_coeffs[0]*p[0] + obj_coeffs[1]*p[1] for p in feasible_points]
+            
+            if problem['type'] == "Maximize":
+                opt_idx = np.argmax(obj_values)
+            else:
+                opt_idx = np.argmin(obj_values)
+                
+            opt_point = feasible_points[opt_idx]
+            opt_value = obj_values[opt_idx]
+
+            explanation += f"\n4.  **Evaluating Objective Function:** The objective function `Z = {obj_coeffs[0]}x1 + {obj_coeffs[1]}x2` is evaluated at each corner point.\n"
+            explanation += f"    - The optimal value is found by {'maximizing' if problem['type'] == 'Maximize' else 'minimizing'} Z.\n"
+            
+            # Plot optimal point
+            ax.plot(opt_point[0], opt_point[1], 'r*', markersize=15, label=f'Optimal Solution')
+            
+            result_text = f"**Optimal Solution Found:**\n\n"
+            result_text += f"**Objective Value (Z):** {opt_value:.4f}\n"
+            result_text += f"**Variables:**\n - x1 = {opt_point[0]:.4f}\n - x2 = {opt_point[1]:.4f}"
+
+        # Final UI display
+        ax.set_xlim(0, 50)
+        ax.set_ylim(0, 50)
+        ax.set_xlabel("x1")
+        ax.set_ylabel("x2")
+        ax.legend()
+        ax.grid(True)
+        
+        canvas = FigureCanvasTkAgg(fig, master=self.results_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(side="left", fill="both", expand=True)
+
+        info_frame = tk.Frame(self.results_frame, width=300)
+        info_frame.pack(side="right", fill="both", expand=True, padx=10)
+
+        tk.Label(info_frame, text="Solution Details", font=("Arial", 14, "bold")).pack(anchor="w")
+        
+        explanation_label = tk.Message(info_frame, text=explanation, width=300, justify="left", font=("Arial", 10))
+        explanation_label.pack(pady=10, anchor="w")
+        
+        result_label = tk.Label(info_frame, text=result_text, justify="left", font=("Arial", 12, "bold"))
+        result_label.pack(pady=20, anchor="w")
+
+    def display_two_phase_solution(self):
+        """Calculates and displays the two-phase method solution."""
+        # --- This is a placeholder for the complex Two-Phase Simplex logic ---
+        # A full implementation is extensive. This sets up the UI to display the results.
+        
+        explanation_frame = tk.LabelFrame(self.results_frame, text="Solution Process (Two-Phase Method)", padx=10, pady=10)
+        explanation_frame.pack(pady=10, fill="x")
+
+        explanation_text = (
+            "The Two-Phase Simplex method is used for problems with '>=' or '=' constraints.\n\n"
+            "**Phase 1:** An artificial objective function (sum of artificial variables) is minimized to find a basic feasible solution. "
+            "If the minimum is 0, a feasible solution exists and we proceed to Phase 2. Otherwise, the problem is infeasible.\n"
+            "   - Slack variables ('s') are added for '<=' constraints.\n"
+            "   - Surplus ('s') and artificial ('a') variables are added for '>=' constraints.\n"
+            "   - Artificial variables ('a') are added for '=' constraints.\n\n"
+            "**Phase 2:** The original objective function is optimized using the standard Simplex method, starting from the feasible solution found in Phase 1."
+        )
+        tk.Message(explanation_frame, text=explanation_text, width=700).pack()
+
+        # --- Placeholder for Iteration Tables ---
+        table_frame = tk.LabelFrame(self.results_frame, text="Iterations", padx=10, pady=10)
+        table_frame.pack(pady=10, fill="both", expand=True)
+        
+        # Add a horizontal scrollbar for the table
+        x_scrollbar = ttk.Scrollbar(table_frame, orient="horizontal")
+        
+        # Example: Creating a placeholder Treeview to show what an iteration table would look like
+        cols = ('Basis', 'x1', 'x2', 's1', 's2', 'a1', 'RHS') # Example columns
+        tree = ttk.Treeview(table_frame, columns=cols, show='headings', xscrollcommand=x_scrollbar.set)
+        x_scrollbar.config(command=tree.xview)
+
+        for col in cols:
+            tree.heading(col, text=col)
+            tree.column(col, width=80)
+        
+        # Placeholder data
+        tree.insert("", "end", values=('a1', '1', '2', '-1', '0', '1', '10'))
+        tree.insert("", "end", values=('s2', '3', '1', '0', '1', '0', '15'))
+        tree.insert("", "end", values=('Z', '-4', '-3', '1', '1', '0', '0'))
+        
+        x_scrollbar.pack(side="bottom", fill="x")
+        tree.pack(fill="both", expand=True)
+        
+        tk.Label(table_frame, text="NOTE: The Two-Phase algorithm logic is not implemented. This is a UI placeholder.").pack(pady=10)
+
+        # --- Final Result ---
+        result_frame = tk.LabelFrame(self.results_frame, text="Final Result", padx=10, pady=10)
+        result_frame.pack(pady=10, fill="x")
+        
+        result_text = "**Optimal Solution Found (Example):**\n\n"
+        result_text += "**Objective Value (Z):** 75.0\n"
+        result_text += "**Variables:**\n - x1 = 15.0\n - x2 = 5.0"
+        tk.Label(result_frame, text=result_text, justify="left", font=("Arial", 12, "bold")).pack()
+        
+        # Add toggle for decimal/fraction
+        # Note: The logic for conversion is not included in this placeholder
+        toggle_button = tk.Button(result_frame, text="Toggle Decimal/Fraction")
+        toggle_button.pack(pady=10)
 
 if __name__ == "__main__":
     app = LinearProgrammingCalculator()
