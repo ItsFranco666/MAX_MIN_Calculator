@@ -154,7 +154,7 @@ class LinearProgrammingCalculator:
         
         const_label = ctk.CTkLabel(
             const_frame,
-            text="Número de Restricciones (1-15):",
+            text="Número de Restricciones (2-15):",
             font=ctk.CTkFont(size=18, weight="bold"),
             text_color=self.colors['text']
         )
@@ -164,10 +164,12 @@ class LinearProgrammingCalculator:
             const_frame,
             width=120,
             font=ctk.CTkFont(size=18),
-            placeholder_text="1"
+            placeholder_text="2"
         )
         self.const_entry.grid(row=0, column=1, sticky="w")
-        self.const_entry.insert(0, str(self.session['num_constraints']))
+        # Si el valor actual es menor que 2, poner 2 por defecto
+        valor_default = max(2, self.session['num_constraints'])
+        self.const_entry.insert(0, str(valor_default))
         
         # Submit button
         submit_btn = ctk.CTkButton(
@@ -192,8 +194,8 @@ class LinearProgrammingCalculator:
                 messagebox.showerror("Entrada inválida", "El número de variables debe estar entre 2 y 10")
                 return
                 
-            if not (1 <= num_consts <= 15):
-                messagebox.showerror("Entrada inválida", "El número de restricciones debe estar entre 1 y 15")
+            if not (2 <= num_consts <= 15):
+                messagebox.showerror("Entrada inválida", "El número de restricciones debe estar entre 2 y 15")
                 return
                 
             # Update session data
