@@ -848,8 +848,7 @@ class LinearProgrammingCalculator:
         self.create_summary_section(summary_tab, result)
         
     def create_phase_table(self, parent, title, iterations_data, var_names):
-        """Create a phase table with simplex iterations using a Treeview."""
-        # Title
+        """Create a phase table with simplex iterations using a grid of labels."""
         title_label = ctk.CTkLabel(
             parent,
             text=title,
@@ -858,7 +857,6 @@ class LinearProgrammingCalculator:
         )
         title_label.pack(pady=(10, 15))
 
-        # Scrollable frame for all iteration tables
         scrollable_area = ctk.CTkScrollableFrame(parent, fg_color=self.colors['background'])
         scrollable_area.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -866,23 +864,7 @@ class LinearProgrammingCalculator:
             ctk.CTkLabel(scrollable_area, text="No hay iteraciones para mostrar.", text_color=self.colors['text']).pack(pady=20)
             return
 
-        # Style the Treeview to match the dark theme
-        style = ttk.Style()
-        style.theme_use("default")
-        style.configure("Treeview",
-                        background=self.colors['surface'],
-                        foreground=self.colors['text'],
-                        fieldbackground=self.colors['surface'],
-                        borderwidth=0,
-                        rowheight=25)
-        style.map('Treeview', background=[('selected', self.colors['primary'])])
-        style.configure("Treeview.Heading",
-                        background=self.colors['background'],
-                        foreground=self.colors['primary'],
-                        font=ctk.CTkFont(size=11, weight="bold"),
-                        padding=(5, 5))
-
-        for iteration_num, tableau_state, basic_vars_indices in iterations_data:
+        for iteration_num, tableau_state, basic_vars_indices, enter_col, leave_row in iterations_data:
             iteration_frame = ctk.CTkFrame(scrollable_area, fg_color=self.colors['surface'])
             iteration_frame.pack(fill="x", pady=(10, 5), padx=5)
 
@@ -894,47 +876,72 @@ class LinearProgrammingCalculator:
             )
             iteration_title.pack(pady=5)
 
+            table_grid_frame = ctk.CTkFrame(iteration_frame, fg_color="transparent")
+            table_grid_frame.pack(fill="x", expand=True, padx=10, pady=5)
+
             m, n = tableau_state.shape
             num_vars = n - 1
-
-            # Setup Treeview for the current iteration
-            tree_frame = ctk.CTkFrame(iteration_frame, fg_color="transparent")
-            tree_frame.pack(fill="x", expand=True, padx=10, pady=5)
-
             header = ['Base'] + (var_names[:num_vars] if var_names else [f'x{i+1}' for i in range(num_vars)]) + ['RHS']
-            
-            tree = ttk.Treeview(tree_frame, columns=header, show='headings', height=m)
 
-            for col_name in header:
-                tree.heading(col_name, text=col_name)
-                tree.column(col_name, width=80, anchor='center')
-            tree.column('Base', width=60, anchor='w')
-
-            # Populate Treeview with tableau data
-            # Constraint rows
-            for i in range(m - 1):
-                base_var_idx = basic_vars_indices[i]
-                base_var_name = var_names[base_var_idx] if 0 <= base_var_idx < len(var_names) else '?'
+            # Create Header
+            for j, col_name in enumerate(header):
+                is_entering_col = (enter_col is not None and j == enter_col + 1)
+                header_color = "#e04400" if is_entering_col else self.colors['primary']
                 
-                row_data = [base_var_name]
-                row_data.extend([f"{val:.3f}" for val in tableau_state[i, :]])
-                tree.insert("", "end", values=tuple(row_data))
+                header_label = ctk.CTkLabel(
+                    table_grid_frame,
+                    text=col_name,
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color=header_color,
+                    fg_color=self.colors['background'],
+                    padx=5, pady=5
+                )
+                header_label.grid(row=0, column=j, sticky="nsew", padx=1, pady=1)
+                table_grid_frame.grid_columnconfigure(j, weight=1)
 
-            # Z-row (objective function)
-            z_row_data = ['Z']
-            z_row_data.extend([f"{val:.3f}" for val in tableau_state[-1, :]])
-            tree.insert("", "end", values=tuple(z_row_data), tags=('z_row',))
-            tree.tag_configure('z_row', background=self.colors['background'])
+            # Populate table with data
+            for i in range(m):
+                # Base Variable Name
+                is_pivot_row = (leave_row is not None and i == leave_row)
+                row_fg_color = self.colors['surface']
 
-            tree.pack(fill="x", expand=True)
+                base_var_name = 'Z'
+                if i < m - 1: # If not the Z-row
+                    base_var_idx = basic_vars_indices[i]
+                    base_var_name = var_names[base_var_idx] if 0 <= base_var_idx < len(var_names) else '?'
+                
+                base_label = ctk.CTkLabel(table_grid_frame, text=base_var_name, fg_color=row_fg_color, font=ctk.CTkFont(size=10))
+                base_label.grid(row=i + 1, column=0, sticky="nsew", padx=1, pady=1)
+
+                # Data cells
+                for j in range(n):
+                    cell_val = tableau_state[i, j]
+                    is_pivot = (is_pivot_row and enter_col is not None and j == enter_col)
+                    is_entering_col = (enter_col is not None and j == enter_col)
+
+                    cell_font = ctk.CTkFont(size=10, weight="bold" if is_pivot else "normal")
+                    cell_fg_color = "#552200" # Pivot background
+                    if not is_pivot:
+                         cell_fg_color = "#3a3a3a" if is_entering_col else row_fg_color
+                    
+                    # Correct sign for Z value display
+                    if i == m - 1 and j == n - 1: # Z-row RHS value
+                        if "Fase 2" in title: # Only flip sign in phase 2
+                           cell_val *= -1
+
+                    cell_label = ctk.CTkLabel(
+                        table_grid_frame,
+                        text=f"{cell_val:.3f}",
+                        fg_color=cell_fg_color,
+                        font=cell_font
+                    )
+                    cell_label.grid(row=i + 1, column=j + 1, sticky="nsew", padx=1, pady=1)
                         
     def create_summary_section(self, parent, result):
         """Create summary section with final results"""
-        # Summary content
         summary_frame = ctk.CTkFrame(parent, fg_color=self.colors['background'])
         summary_frame.pack(fill="both", expand=True, padx=15, pady=15)
         
-        # Final solution
         solution_frame = ctk.CTkFrame(summary_frame, fg_color=self.colors['primary'])
         solution_frame.pack(fill="x", pady=(0, 20))
         
@@ -946,19 +953,20 @@ class LinearProgrammingCalculator:
         )
         solution_title.pack(pady=(15, 10))
         
-        if result['status'] == "Optimal":
+        if result.get('status') == "Optimal":
             solution_text = "Solución Óptima Encontrada:\n"
-            for var, val in result['optimal_solution'].items():
-                if var.startswith('x'): # Only show original variables
-                    solution_text += f"{var} = {val:.2f}\n"
-            solution_text += f"Valor Objetivo (Z) = {result['optimal_value']:.2f}\n"
-            solution_text += "Estado: Óptimo"
+            if result.get('optimal_solution'):
+                for var, val in result['optimal_solution'].items():
+                    if var.startswith('x'):
+                        solution_text += f"{var} = {val:.3f}\n"
+            solution_text += f"Valor Objetivo (Z) = {result.get('optimal_value', 0):.3f}\n"
+            solution_text += f"Estado: {result.get('status')}"
         else:
-            solution_text = f"Estado: {result['status']}\n"
-            if result['status'] == "Infeasible":
+            solution_text = f"Estado: {result.get('status', 'Desconocido')}\n"
+            if result.get('status') == "Infeasible":
                 solution_text += "El problema no tiene solución factible."
-            elif result['status'] == "Unbounded":
-                solution_text += "La función objetivo puede ser incrementada/decrementada indefinidamente."
+            elif result.get('status') == "Unbounded":
+                solution_text += "La función objetivo es no acotada."
         
         solution_label = ctk.CTkLabel(
             solution_frame,
@@ -968,7 +976,7 @@ class LinearProgrammingCalculator:
             justify="center"
         )
         solution_label.pack(pady=(0, 15))
-        
+
         # Phase summary
         phase_summary_frame = ctk.CTkFrame(summary_frame, fg_color=self.colors['surface'])
         phase_summary_frame.pack(fill="x", pady=10)
@@ -981,134 +989,16 @@ class LinearProgrammingCalculator:
         )
         phase_title.pack(pady=(15, 10))
         
-        if result['status'] == "Optimal":
-            # Phase 1 summary
-            phase1_frame = ctk.CTkFrame(phase_summary_frame, fg_color="transparent")
-            phase1_frame.pack(fill="x", pady=5, padx=15)
-            
-            phase1_label = ctk.CTkLabel(
-                phase1_frame,
-                text=f"Fase 1: Solución básica factible inicial encontrada en {len(result['phase1_iterations'])} iteraciones",
-                font=ctk.CTkFont(size=11),
-                text_color=self.colors['text']
-            )
-            phase1_label.pack(anchor="w")
-            
-            # Phase 2 summary
-            phase2_frame = ctk.CTkFrame(phase_summary_frame, fg_color="transparent")
-            phase2_frame.pack(fill="x", pady=5, padx=15)
-            
-            phase2_label = ctk.CTkLabel(
-                phase2_frame,
-                text=f"Fase 2: Solución óptima alcanzada en {len(result['phase2_iterations'])} iteraciones",
-                font=ctk.CTkFont(size=11),
-                text_color=self.colors['text']
-            )
-            phase2_label.pack(anchor="w")
-            
-            # Total iterations
-            total_frame = ctk.CTkFrame(phase_summary_frame, fg_color="transparent")
-            total_frame.pack(fill="x", pady=(5, 15), padx=15)
-            
-            total_label = ctk.CTkLabel(
-                total_frame,
-                text=f"Iteraciones Totales: {len(result['phase1_iterations']) + len(result['phase2_iterations'])}",
-                font=ctk.CTkFont(size=11, weight="bold"),
-                text_color=self.colors['primary']
-            )
-            total_label.pack(anchor="w")
-        else:
-            ctk.CTkLabel(phase_summary_frame, text="Resúmenes de fases no disponibles debido al estado no óptimo.", text_color=self.colors['text_secondary']).pack(pady=10)
+        p1_iters = len(result.get('phase1_iterations', []))
+        p2_iters = len(result.get('phase2_iterations', []))
 
-        # Sensitivity analysis section (still mock data as LPSolver does not compute this yet)
-        sensitivity_frame = ctk.CTkFrame(summary_frame, fg_color=self.colors['surface'])
-        sensitivity_frame.pack(fill="both", expand=True, pady=10)
-        
-        sensitivity_title = ctk.CTkLabel(
-            sensitivity_frame,
-            text="Análisis de Sensibilidad (Datos Simulados)",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color=self.colors['primary']
-        )
-        sensitivity_title.pack(pady=(15, 10))
-        
-        # Variables table
-        var_table_frame = ctk.CTkFrame(sensitivity_frame, fg_color=self.colors['background'])
-        var_table_frame.pack(fill="x", pady=10, padx=15)
-        
-        var_headers = ["Variable", "Valor", "Costo Reducido", "Límite Inferior", "Límite Superior"]
-        var_data = [
-            ["x₁", "2.67", "0", "0", "∞"],
-            ["x₂", "2.67", "0", "0", "∞"]
-        ]
-        
-        # Variable headers
-        var_header_frame = ctk.CTkFrame(var_table_frame, fg_color=self.colors['primary'])
-        var_header_frame.pack(fill="x", pady=(0, 2))
-        
-        for i, header in enumerate(var_headers):
-            header_label = ctk.CTkLabel(
-                var_header_frame,
-                text=header,
-                font=ctk.CTkFont(size=10, weight="bold"),
-                text_color="white",
-                width=80
-            )
-            header_label.grid(row=0, column=i, padx=2, pady=3, sticky="ew")
-            
-        # Variable data
-        for row_idx, row_data in enumerate(var_data):
-            row_frame = ctk.CTkFrame(var_table_frame, fg_color="transparent")
-            row_frame.pack(fill="x", pady=1)
-            
-            for col_idx, cell_data in enumerate(row_data):
-                cell_label = ctk.CTkLabel(
-                    row_frame,
-                    text=cell_data,
-                    font=ctk.CTkFont(size=10),
-                    text_color=self.colors['text'],
-                    width=80
-                )
-                cell_label.grid(row=0, column=col_idx, padx=2, pady=2, sticky="ew")
-                
-        # Constraints table
-        const_table_frame = ctk.CTkFrame(sensitivity_frame, fg_color=self.colors['background'])
-        const_table_frame.pack(fill="x", pady=10, padx=15)
-        
-        const_headers = ["Restricción", "Holgura/Excedente", "Precio Sombra", "Rango RHS"]
-        const_data = [
-            ["Restricción 1", "0", "1.33", "[4, 12]"],
-            ["Restricción 2", "0", "0.67", "[6, 16]"]
-        ]
-        
-        # Constraint headers
-        const_header_frame = ctk.CTkFrame(const_table_frame, fg_color=self.colors['primary'])
-        const_header_frame.pack(fill="x", pady=(0, 2))
-        
-        for i, header in enumerate(const_headers):
-            header_label = ctk.CTkLabel(
-                const_header_frame,
-                text=header,
-                font=ctk.CTkFont(size=10, weight="bold"),
-                text_color="white",
-                width=100
-            )
-            header_label.grid(row=0, column=i, padx=2, pady=3, sticky="ew")
-            
-        # Constraint data
-        for row_idx, row_data in enumerate(const_data):
-            row_frame = ctk.CTkFrame(const_table_frame, fg_color="transparent")
-            row_frame.pack(fill="x", pady=1)
-            
-            for col_idx, cell_data in enumerate(row_data):
-                cell_label = ctk.CTkLabel(
-                    row_frame,
-                    text=cell_data,
-                    font=ctk.CTkFont(size=10),
-                    text_color=self.colors['text'],
-                    width=100
-                )
-                cell_label.grid(row=0, column=col_idx, padx=2, pady=2, sticky="ew")
+        phase1_text = f"Fase 1: Completada en {p1_iters} iteraciones."
+        phase2_text = f"Fase 2: Completada en {p2_iters} iteraciones."
+        if result.get('status') != "Optimal":
+            phase2_text = f"Fase 2: No se completó. Estado: {result.get('status')}"
+
+        ctk.CTkLabel(phase_summary_frame, text=phase1_text, font=ctk.CTkFont(size=11), text_color=self.colors['text']).pack(anchor="w", padx=15)
+        ctk.CTkLabel(phase_summary_frame, text=phase2_text, font=ctk.CTkFont(size=11), text_color=self.colors['text']).pack(anchor="w", padx=15, pady=(0,15))
                 
     def run(self):
         """Start the application"""
@@ -1325,7 +1215,7 @@ class LPSolver:
         """Perform pivot on (row,col) in tableau mat in‑place"""
         m, n = mat.shape
         pivot_val = mat[row, col]
-        if abs(pivot_val) < LPSolver.TOL: # Avoid division by zero or very small numbers
+        if abs(pivot_val) < 1e-9: # Avoid division by zero or very small numbers
             raise ValueError("Elemento pivote demasiado pequeño o cero.")
         
         mat[row, :] = mat[row, :] / pivot_val
@@ -1335,61 +1225,51 @@ class LPSolver:
 
     def solve_two_phase(self):
         """Two-phase simplex algorithm returning a detailed solution dict."""
-        # --------------------------- Phase 1 ----------------------------
         tableau_initial, basic_vars_initial, var_names_full, art_cols = self._standard_form()
         
-        if not art_cols: # No artificial variables needed, skip Phase 1
+        if not art_cols:
             return self._solve_simplex_phase2_only(tableau_initial, basic_vars_initial, var_names_full)
 
-        tableau = copy.deepcopy(tableau_initial) # Work on a copy
+        tableau = copy.deepcopy(tableau_initial)
         basic_vars = copy.deepcopy(basic_vars_initial)
-        m, n = tableau.shape # rows, cols (cols include RHS)
+        m, n = tableau.shape
 
-        # Phase-1 objective: minimise Σ artificial  →  maximise −Σ artificial
         z_row_phase1 = np.zeros(n)
         for a_col_idx in art_cols:
             z_row_phase1[a_col_idx] = -1
-        
         tableau = np.vstack([tableau, z_row_phase1])
 
-        # Make Phase-1 objective canonical w.r.t. current basis
         for i, b_var_idx in enumerate(basic_vars):
             if b_var_idx in art_cols:
                 tableau[-1, :] += tableau[i, :]
 
         it = 1
-        phase1_iterations = [(it, copy.deepcopy(tableau), copy.deepcopy(basic_vars))]
+        phase1_iterations = [(it, copy.deepcopy(tableau), copy.deepcopy(basic_vars), None, None)]
         it += 1
         
         while True:
             obj_coeffs = tableau[-1, :-1]
             enter_candidates = [j for j, v in enumerate(obj_coeffs) if v > self.TOL]
-            
             if not enter_candidates:
                 break
             
-            enter = enter_candidates[np.argmax([obj_coeffs[j] for j in enter_candidates])]
+            enter_col = max(enter_candidates, key=lambda j: obj_coeffs[j])
 
-            ratios = []
-            for i in range(m):
-                if tableau[i, enter] > self.TOL:
-                    ratio = tableau[i, -1] / tableau[i, enter]
-                    ratios.append((ratio, i))
-            
+            ratios = [(tableau[i, -1] / tableau[i, enter_col], i) for i in range(m) if tableau[i, enter_col] > self.TOL]
             if not ratios:
                 return {"status": "Infactible", "phase1_iterations": phase1_iterations, "phase2_iterations": []}
 
-            leave = min(ratios, key=lambda x: x[0])[1]
+            leave_row = min(ratios, key=lambda x: x[0])[1]
 
-            self._pivot(tableau, leave, enter)
-            basic_vars[leave] = enter
-            phase1_iterations.append((it, copy.deepcopy(tableau), copy.deepcopy(basic_vars)))
+            self._pivot(tableau, leave_row, enter_col)
+            basic_vars[leave_row] = enter_col
+            phase1_iterations.append((it, copy.deepcopy(tableau), copy.deepcopy(basic_vars), enter_col, leave_row))
             it += 1
 
         if abs(tableau[-1, -1]) > self.TOL:
             return {"status": "Infactible", "phase1_iterations": phase1_iterations, "phase2_iterations": []}
         
-        # ---------------- Prepare tableau for Phase 2 -------------------
+        # Prepare for Phase 2
         original_and_slack_surplus_vars = [idx for idx, name in enumerate(var_names_full) if not name.startswith('a')]
         new_tableau_cols = original_and_slack_surplus_vars + [n-1]
         tableau_phase2 = tableau[:-1, new_tableau_cols]
@@ -1399,62 +1279,49 @@ class LPSolver:
         basic_vars_phase2 = [old_to_new_col_map[b] for b in basic_vars if b in old_to_new_col_map]
 
         m_phase2, n_phase2 = tableau_phase2.shape
-        
         obj_row_phase2 = np.zeros(n_phase2)
         
-        c_coeffs = self.c if self.obj_type == "maximize" else -self.c
         for i in range(self.n):
-            obj_row_phase2[i] = -c_coeffs[i]
-
+            obj_row_phase2[i] = -self.c[i]
         tableau_phase2 = np.vstack([tableau_phase2, obj_row_phase2])
 
-        for i, basic_var_col_idx in enumerate(basic_vars):
-            if basic_var_col_idx < self.n: # If original var is basic
-                factor = tableau_phase2[-1, basic_var_col_idx]
-                if abs(factor) > self.TOL:
-                    tableau_phase2[-1, :] -= factor * tableau_phase2[i, :]
+        for i, basic_var_col_idx in enumerate(basic_vars_phase2):
+            coeff_in_z = tableau_phase2[-1, basic_var_col_idx]
+            if abs(coeff_in_z) > self.TOL:
+                tableau_phase2[-1, :] -= coeff_in_z * tableau_phase2[i, :]
 
-        # --------------------------- Phase 2 ----------------------------
+        # Phase 2 iterations
         it = 1
-        phase2_iterations = [(it, copy.deepcopy(tableau_phase2), copy.deepcopy(basic_vars))]
+        phase2_iterations = [(it, copy.deepcopy(tableau_phase2), copy.deepcopy(basic_vars_phase2), None, None)]
         it += 1
         
         while True:
             obj_coeffs_phase2 = tableau_phase2[-1, :-1]
             enter_candidates = [j for j, v in enumerate(obj_coeffs_phase2) if v > self.TOL]
-
             if not enter_candidates:
                 break
             
-            enter = enter_candidates[np.argmax([obj_coeffs_phase2[j] for j in enter_candidates])]
+            enter_col = max(enter_candidates, key=lambda j: obj_coeffs_phase2[j])
 
-            ratios = []
-            for i in range(m_phase2):
-                if tableau_phase2[i, enter] > self.TOL:
-                    ratio = tableau_phase2[i, -1] / tableau_phase2[i, enter]
-                    ratios.append((ratio, i))
-
+            ratios = [(tableau_phase2[i, -1] / tableau_phase2[i, enter_col], i) for i in range(m_phase2) if tableau_phase2[i, enter_col] > self.TOL]
             if not ratios:
                 return {"status": "No acotado", "phase1_iterations": phase1_iterations, "phase2_iterations": phase2_iterations}
 
-            leave = min(ratios, key=lambda x: x[0])[1]
+            leave_row = min(ratios, key=lambda x: x[0])[1]
 
-            self._pivot(tableau_phase2, leave, enter)
-            basic_vars[leave] = enter
-            phase2_iterations.append((it, copy.deepcopy(tableau_phase2), copy.deepcopy(basic_vars)))
+            self._pivot(tableau_phase2, leave_row, enter_col)
+            basic_vars_phase2[leave_row] = enter_col
+            phase2_iterations.append((it, copy.deepcopy(tableau_phase2), copy.deepcopy(basic_vars_phase2), enter_col, leave_row))
             it += 1
 
-        # --------------------------  Results  ---------------------------
+        # Results
         solution = {v: 0.0 for v in var_names_phase2}
-        for i, b in enumerate(basic_vars):
-            if 0 <= b < len(var_names_phase2):
-                solution[var_names_phase2[b]] = tableau_phase2[i, -1]
+        for i, b in enumerate(basic_vars_phase2):
+            solution[var_names_phase2[b]] = tableau_phase2[i, -1]
 
         opt_val = tableau_phase2[-1, -1]
         if self.obj_type == "maximize":
-            opt_val = -opt_val
-
-        final_solution_vars = {k:v for k,v in solution.items() if k.startswith('x')}
+            opt_val *= -1
 
         return {
             "status": "Optimal",
@@ -1462,31 +1329,27 @@ class LPSolver:
             "phase2_iterations": phase2_iterations,
             "variable_names_phase1": var_names_full,
             "variable_names_phase2": var_names_phase2,
-            "optimal_solution": final_solution_vars,
+            "optimal_solution": {k:v for k,v in solution.items() if k.startswith('x')},
             "optimal_value": opt_val,
         }
 
     def _solve_simplex_phase2_only(self, tableau_initial, basic_vars_initial, var_names_full):
-        """Helper to run simplex if no artificial variables are needed."""
         tableau = copy.deepcopy(tableau_initial)
         basic_vars = copy.deepcopy(basic_vars_initial)
         m, n = tableau.shape
 
         obj_row_phase2 = np.zeros(n)
-        c_coeffs = self.c if self.obj_type == "maximize" else -self.c
         for i in range(self.n):
-            obj_row_phase2[i] = -c_coeffs[i]
-        
+            obj_row_phase2[i] = -self.c[i]
         tableau = np.vstack([tableau, obj_row_phase2])
         
         for i, b_var_col_idx in enumerate(basic_vars):
-            if 0 <= b_var_col_idx < n - 1:
-                if abs(tableau[-1, b_var_col_idx]) > self.TOL:
-                    factor = tableau[-1, b_var_col_idx]
-                    tableau[-1, :] -= factor * tableau[i, :]
+            coeff_in_z = tableau[-1, b_var_col_idx]
+            if abs(coeff_in_z) > self.TOL:
+                tableau[-1, :] -= coeff_in_z * tableau[i, :]
 
         it = 1
-        phase2_iterations = [(it, copy.deepcopy(tableau), copy.deepcopy(basic_vars))]
+        phase2_iterations = [(it, copy.deepcopy(tableau), copy.deepcopy(basic_vars), None, None)]
         it += 1
         
         while True:
@@ -1495,34 +1358,26 @@ class LPSolver:
             if not enter_candidates:
                 break
             
-            enter = enter_candidates[np.argmax([obj_coeffs[j] for j in enter_candidates])]
+            enter_col = max(enter_candidates, key=lambda j: obj_coeffs[j])
 
-            ratios = []
-            for i in range(m):
-                if tableau[i, enter] > self.TOL:
-                    ratio = tableau[i, -1] / tableau[i, enter]
-                    ratios.append((ratio, i))
-
+            ratios = [(tableau[i, -1] / tableau[i, enter_col], i) for i in range(m) if tableau[i, enter_col] > self.TOL]
             if not ratios:
                 return {"status": "No acotado", "phase1_iterations": [], "phase2_iterations": phase2_iterations}
 
-            leave = min(ratios, key=lambda x: x[0])[1]
+            leave_row = min(ratios, key=lambda x: x[0])[1]
 
-            self._pivot(tableau, leave, enter)
-            basic_vars[leave] = enter
-            phase2_iterations.append((it, copy.deepcopy(tableau), copy.deepcopy(basic_vars)))
+            self._pivot(tableau, leave_row, enter_col)
+            basic_vars[leave_row] = enter_col
+            phase2_iterations.append((it, copy.deepcopy(tableau), copy.deepcopy(basic_vars), enter_col, leave_row))
             it += 1
 
         solution = {v: 0.0 for v in var_names_full}
         for i, b in enumerate(basic_vars):
-            if 0 <= b < len(var_names_full):
-                solution[var_names_full[b]] = tableau[i, -1]
+            solution[var_names_full[b]] = tableau[i, -1]
         
         opt_val = tableau[-1, -1]
         if self.obj_type == "maximize":
-            opt_val = -opt_val
-
-        final_solution_vars = {k:v for k,v in solution.items() if k.startswith('x')}
+            opt_val *= -1
 
         return {
             "status": "Optimal",
@@ -1530,7 +1385,7 @@ class LPSolver:
             "phase2_iterations": phase2_iterations,
             "variable_names_phase1": [],
             "variable_names_phase2": var_names_full,
-            "optimal_solution": final_solution_vars,
+            "optimal_solution": {k:v for k,v in solution.items() if k.startswith('x')},
             "optimal_value": opt_val,
         }
 
