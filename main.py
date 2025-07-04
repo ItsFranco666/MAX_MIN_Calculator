@@ -747,20 +747,42 @@ class LinearProgrammingCalculator:
         if not self.collect_input_data():
             return
             
+        # Validate input data
+        try:
+            # Check for valid coefficients
+            if not any(abs(c) > 1e-10 for c in self.session['objective_coeffs']):
+                messagebox.showwarning("Advertencia", "La función objetivo tiene todos los coeficientes iguales a cero.")
+            
+            # Check for valid constraints
+            if not any(any(abs(c) > 1e-10 for c in row) for row in self.session['constraint_coeffs']):
+                messagebox.showerror("Error", "Todas las restricciones tienen coeficientes iguales a cero.")
+                return
+                
+        except Exception as e:
+            messagebox.showerror("Error de validación", f"Error validando datos: {str(e)}")
+            return
+            
         # Instantiate solver
-        solver = LPSolver(
-            self.session['objective_coeffs'],
-            self.session['constraint_coeffs'],
-            self.session['constraint_signs'],
-            self.session['constraint_values'],
-            self.session['objective_type']
-        )
+        try:
+            solver = LPSolver(
+                self.session['objective_coeffs'],
+                self.session['constraint_coeffs'],
+                self.session['constraint_signs'],
+                self.session['constraint_values'],
+                self.session['objective_type']
+            )
+        except Exception as e:
+            messagebox.showerror("Error de inicialización", f"Error inicializando el solver: {str(e)}")
+            return
 
         try:
             result = solver.solve_two_phase()
             self.session['twophase_result'] = result
         except ValueError as e:
             messagebox.showerror("Error en Método Dos Fases", str(e))
+            return
+        except Exception as e:
+            messagebox.showerror("Error inesperado", f"Error inesperado en el método dos fases: {str(e)}")
             return
             
         # Clear existing widgets
@@ -802,17 +824,25 @@ class LinearProgrammingCalculator:
         
         # Phase 1 tab
         phase1_tab = tabview.add("Fase 1")
-        if result['status'] == "Optimal":
-            self.create_phase_table(phase1_tab, "Fase 1: Encontrar Solución Básica Factible Inicial", result['phase1_iterations'], result['variable_names'])
+        if result.get('phase1_iterations'):
+            var_names_phase1 = result.get('variable_names', [])
+            self.create_phase_table(phase1_tab, "Fase 1: Encontrar Solución Básica Factible Inicial", result['phase1_iterations'], var_names_phase1)
         else:
-            ctk.CTkLabel(phase1_tab, text=f"Estado de Fase 1: {result['status']}", text_color=self.colors['text']).pack(pady=20)
+            status_text = result.get('status', 'Desconocido')
+            ctk.CTkLabel(phase1_tab, text=f"Estado de Fase 1: {status_text}\nNo hay iteraciones que mostrar.", text_color=self.colors['text']).pack(pady=20)
         
         # Phase 2 tab
         phase2_tab = tabview.add("Fase 2")
-        if result['status'] == "Optimal":
-            self.create_phase_table(phase2_tab, "Fase 2: Optimizar Problema Original", result['phase2_iterations'], [v for v in result['variable_names'] if not v.startswith('a')]) # Filter out artificial vars for phase 2 display
+        if result.get('phase2_iterations'):
+            # For Phase 2, use all variable names since artificial variables have been removed in solver
+            phase2_var_names = result.get('variable_names', [])
+            self.create_phase_table(phase2_tab, "Fase 2: Optimizar Problema Original", result['phase2_iterations'], phase2_var_names)
         else:
-            ctk.CTkLabel(phase2_tab, text=f"Estado de Fase 2: {result['status']}", text_color=self.colors['text']).pack(pady=20)
+            status_text = result.get('status', 'Desconocido')
+            if result['status'] in ['Infactible', 'No acotado']:
+                ctk.CTkLabel(phase2_tab, text=f"Estado: {status_text}\nNo se pudo completar la Fase 2.", text_color=self.colors['text']).pack(pady=20)
+            else:
+                ctk.CTkLabel(phase2_tab, text=f"Estado de Fase 2: {status_text}\nNo hay iteraciones que mostrar.", text_color=self.colors['text']).pack(pady=20)
         
         # Summary tab
         summary_tab = tabview.add("Resumen")
@@ -833,117 +863,84 @@ class LinearProgrammingCalculator:
         table_frame = ctk.CTkScrollableFrame(parent, fg_color=self.colors['background'])
         table_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
-        if not iterations_data:
+        if not iterations_data or len(iterations_data) == 0:
             ctk.CTkLabel(table_frame, text="No iteraciones para mostrar o ya óptimo.", text_color=self.colors['text']).pack(pady=20)
             return
 
-        # Prepare headers: Basic Var, x1, x2, ..., slack/surplus/artificial, RHS
-        headers = ["Iteración", "Variable Básica"] + var_names + ["RHS"] + ["Razón"]
-        
-        # Create table headers
-        header_frame = ctk.CTkFrame(table_frame, fg_color=self.colors['primary'])
-        header_frame.pack(fill="x", pady=(0, 5))
-        
-        for i, header in enumerate(headers):
-            header_label = ctk.CTkLabel(
-                header_frame,
-                text=header,
-                font=ctk.CTkFont(size=11, weight="bold"),
-                text_color="white",
-                width=80 if header != "Variable Básica" else 100 # Adjust width for Basic Var
-            )
-            header_label.grid(row=0, column=i, padx=2, pady=5, sticky="ew")
-            
-        # Create table rows
+        # Simplified display for table iterations
         for iteration_num, tableau_state in iterations_data:
-            m, n = tableau_state.shape
-            
-            # Assuming the basic variables are correctly identified within the solver's iteration data
-            # For a more robust display, the solver should return which variable is basic for each row.
-            # For now, we'll try to deduce it or use a placeholder.
-            # The actual basic variables are implicit in the tableau (identity matrix columns).
-            
-            # This part needs to be more robust. The LPSolver should return `basic_vars` for each iteration for proper display.
-            # For now, we'll just display the full tableau and indicate the Z-row.
-            
-            for row_idx in range(m):
-                row_frame = ctk.CTkFrame(
-                    table_frame,
-                    fg_color=self.colors['surface'] if row_idx < m - 1 else "#1a4d1a" # Z-row highlighted
+            try:
+                m, n = tableau_state.shape
+                iteration_frame = ctk.CTkFrame(table_frame, fg_color=self.colors['surface'])
+                iteration_frame.pack(fill="x", pady=(10, 5), padx=5)
+                iteration_title = ctk.CTkLabel(
+                    iteration_frame,
+                    text=f"Iteración {iteration_num}",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    text_color=self.colors['primary']
                 )
-                row_frame.pack(fill="x", pady=1)
-
-                # Iteration number
-                it_label = ctk.CTkLabel(
-                    row_frame,
-                    text=str(iteration_num) if row_idx == 0 else "", # Only show iteration for first row of the tableau
-                    font=ctk.CTkFont(size=10),
+                iteration_title.pack(pady=5)
+                
+                # Create a text display for the tableau
+                text_frame = ctk.CTkFrame(table_frame, fg_color=self.colors['background'])
+                text_frame.pack(fill="x", pady=5, padx=10)
+                
+                # Format tableau as text
+                tableau_text = f"Tableau Iteración {iteration_num}:\n"
+                tableau_text += "=" * 50 + "\n"
+                
+                # Create header
+                max_vars_to_show = min(len(var_names) if var_names else n-1, n-1)
+                if var_names and len(var_names) >= max_vars_to_show:
+                    header_vars = var_names[:max_vars_to_show]
+                else:
+                    # Fallback to generic variable names
+                    header_vars = [f"x{i+1}" for i in range(max_vars_to_show)]
+                
+                tableau_text += f"{'Base':<8}"
+                for var in header_vars:
+                    tableau_text += f"{var:<10}"
+                tableau_text += f"{'RHS':<10}\n"
+                tableau_text += "-" * (8 + len(header_vars) * 10 + 10) + "\n"
+                
+                # Add rows
+                for row_idx in range(m):
+                    if row_idx == m - 1:
+                        row_name = "Z"
+                    else:
+                        row_name = f"R{row_idx+1}"
+                    
+                    tableau_text += f"{row_name:<8}"
+                    
+                    # Add variable coefficients
+                    for col_idx in range(max_vars_to_show):
+                        if col_idx < n - 1:  # Make sure we don't exceed tableau dimensions
+                            tableau_text += f"{tableau_state[row_idx, col_idx]:<10.2f}"
+                        else:
+                            tableau_text += f"{'0.00':<10}"
+                    
+                    # Add RHS
+                    if n > 0:
+                        tableau_text += f"{tableau_state[row_idx, -1]:<10.2f}"
+                    tableau_text += "\n"
+                
+                tableau_label = ctk.CTkLabel(
+                    text_frame,
+                    text=tableau_text,
+                    font=ctk.CTkFont("Courier", size=9),
                     text_color=self.colors['text'],
-                    width=80
+                    justify="left"
                 )
-                it_label.grid(row=0, column=0, padx=2, pady=3, sticky="ew")
-
-                # Basic Variable (Placeholder - needs enhancement from solver)
-                # This is tricky without the solver explicitly providing which variable is basic for each row of the tableau.
-                # For now, we might just label it 'R' for row or deduce if possible from identity columns.
-                basic_var_text = "Z" if row_idx == m - 1 else f"R{row_idx+1}" # Simple placeholder
-                if row_idx < m -1 : # Try to find the basic variable for non-Z rows
-                    for j in range(n-1): # Iterate through variable columns (excluding RHS)
-                        col = tableau_state[:, j]
-                        is_basic_column = False
-                        if abs(tableau_state[row_idx, j] - 1) < LPSolver.TOL:
-                            temp_col = np.zeros(m-1)
-                            temp_col[row_idx] = 1
-                            if np.allclose(col[:-1], temp_col, atol=LPSolver.TOL): # Compare non-Z part of column
-                                basic_var_text = var_names[j]
-                                is_basic_column = True
-                                break
+                tableau_label.pack(anchor="w", padx=10, pady=5)
                 
-                basic_var_label = ctk.CTkLabel(
-                    row_frame,
-                    text=basic_var_text,
-                    font=ctk.CTkFont(size=10, weight="bold" if basic_var_text == "Z" else "normal"),
-                    text_color="white" if basic_var_text == "Z" else self.colors['text'],
-                    width=100
+            except Exception as e:
+                error_label = ctk.CTkLabel(
+                    table_frame,
+                    text=f"Error mostrando iteración {iteration_num}: {str(e)}",
+                    font=ctk.CTkFont(size=10),
+                    text_color="red"
                 )
-                basic_var_label.grid(row=0, column=1, padx=2, pady=3, sticky="ew")
-                
-                # Tableau data (coefficients and RHS)
-                for col_idx in range(n):
-                    cell_data = f"{tableau_state[row_idx, col_idx]:.2f}"
-                    # Skip ratio column for Z-row and the last column (RHS) for non-Z rows in table display
-                    if col_idx == n-1 and row_idx < m-1: # RHS column for non-Z rows
-                         cell_label = ctk.CTkLabel(
-                            row_frame,
-                            text=cell_data,
-                            font=ctk.CTkFont(size=10),
-                            text_color=self.colors['text'],
-                            width=80
-                        )
-                         cell_label.grid(row=0, column=len(var_names) + 2, padx=2, pady=3, sticky="ew") # Place RHS after variables
-                    elif col_idx < n-1: # Variable coefficients
-                        cell_label = ctk.CTkLabel(
-                            row_frame,
-                            text=cell_data,
-                            font=ctk.CTkFont(size=10),
-                            text_color=self.colors['text'],
-                            width=80
-                        )
-                        cell_label.grid(row=0, column=col_idx + 2, padx=2, pady=3, sticky="ew") # Shift by 2 for Iteration and Basic Var
-                
-                # Ratio column (only for non-Z rows) - this is tricky to get from current solver output.
-                # The solver provides the leaving variable index, implying ratios were calculated internally.
-                # To display ratios, the solver's iteration data needs to include the ratios too.
-                # For now, we'll just put a placeholder.
-                if row_idx < m - 1:
-                    ratio_label = ctk.CTkLabel(
-                        row_frame,
-                        text="N/A", # Placeholder, requires more info from LPSolver
-                        font=ctk.CTkFont(size=10),
-                        text_color=self.colors['text_secondary'],
-                        width=80
-                    )
-                    ratio_label.grid(row=0, column=len(headers) - 1, padx=2, pady=3, sticky="ew")
+                error_label.pack(pady=5)
                         
     def create_summary_section(self, parent, result):
         """Create summary section with final results"""
@@ -1437,7 +1434,14 @@ class LPSolver:
             if old_basic_idx in old_to_new_col_map:
                 basic_vars_phase2.append(old_to_new_col_map[old_basic_idx])
             else:
-                basic_vars_phase2.append(-1) # Should not happen if basic variables are tracked correctly
+                # Find a suitable slack variable to make basic instead
+                # This happens when artificial variables were basic but are now removed
+                for i, name in enumerate(var_names_phase2):
+                    if name.startswith('s') and i not in basic_vars_phase2:
+                        basic_vars_phase2.append(i)
+                        break
+                else:
+                    basic_vars_phase2.append(0) # Fallback to first variable
 
         m_phase2, n_phase2 = tableau_phase2.shape
         
@@ -1449,8 +1453,8 @@ class LPSolver:
         for i in range(self.n):
             if self.obj_type == "maximize":
                 obj_row_phase2[i] = -self.c[i] # For maximization, convert to -Z
-            else: # Minimize
-                obj_row_phase2[i] = self.c[i] # For minimization, convert to Max -Z (so positive c_i)
+            else: # Minimize: convert to Max(-f) so negate the coefficients
+                obj_row_phase2[i] = -self.c[i] # For minimization, negate to maximize -f(x)
 
         # Append objective row to tableau
         tableau_phase2 = np.vstack([tableau_phase2, obj_row_phase2])
@@ -1503,7 +1507,7 @@ class LPSolver:
 
         opt_val = tableau_phase2[-1, -1]
         if self.obj_type == "minimize":
-            opt_val = -opt_val # Revert objective value if minimized
+            opt_val = -opt_val # For minimization, we maximized -f(x), so negate to get f(x)
 
         # Filter solution to only show original variables (x1, x2, ...)
         final_solution_vars = {k:v for k,v in solution.items() if k.startswith('x')}
@@ -1529,7 +1533,7 @@ class LPSolver:
             if self.obj_type == "maximize":
                 obj_row_phase2[i] = -self.c[i]
             else:
-                obj_row_phase2[i] = self.c[i]
+                obj_row_phase2[i] = -self.c[i] # For minimization, negate to maximize -f(x)
         
         tableau = np.vstack([tableau, obj_row_phase2])
         
@@ -1574,7 +1578,7 @@ class LPSolver:
         
         opt_val = tableau[-1, -1]
         if self.obj_type == "minimize":
-            opt_val = -opt_val
+            opt_val = opt_val # For minimization, tableau value is already correct
 
         final_solution_vars = {k:v for k,v in solution.items() if k.startswith('x')}
 
