@@ -1,3 +1,6 @@
 numpy==2.3.1
 matplotlib==3.10.3
 customtkinter==5.2.2
+scipy
+pillow
+pyinstaller

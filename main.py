@@ -9,10 +9,20 @@ import os
 import itertools
 import math
 import copy
+import sys
 
 # Configure CustomTkinter
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+# Añadir función para rutas de recursos compatible con PyInstaller
+def resource_path(relative_path):
+    """Obtiene la ruta absoluta al recurso, compatible con PyInstaller."""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 class LinearProgrammingCalculator:
     def __init__(self):
@@ -58,7 +68,7 @@ class LinearProgrammingCalculator:
         
         # Cargar y mostrar el logo real centrado
         try:
-            logo_img = Image.open(AppConfig.LOGO_PATH).convert("RGBA")
+            logo_img = Image.open(resource_path(AppConfig.LOGO_PATH)).convert("RGBA")
             logo_img = logo_img.resize((150, 150), Image.LANCZOS)
             self.logo_photo = ctk.CTkImage(light_image=logo_img, dark_image=logo_img, size=(150, 150))
             logo_label = ctk.CTkLabel(
@@ -505,6 +515,10 @@ class LinearProgrammingCalculator:
         try:
             result = solver.solve_graphical()
             self.session['graphical_result'] = result
+
+            if result.get('status') != "Optimal" or 'feasible_points' not in result:
+                messagebox.showerror("Método Gráfico", "No se encontró una región factible o el problema no tiene solución gráfica.")
+                return
         except ValueError as e:
             messagebox.showerror("Error en Método Gráfico", str(e))
             return
@@ -578,12 +592,21 @@ class LinearProgrammingCalculator:
 
         # Graficar restricciones en todo el rango de x
         for i, (a, b, c) in enumerate(result['constraint_lines']):
+            if self.session['constraint_signs'][i] == "≥":
+                # Invertir la desigualdad para representarlo como "≤"
+                a, b, c = -a, -b, -c
+
             if b == 0 and a != 0:  # Línea vertical x = c/a
                 x_val = c / a
-                ax.axvline(x_val, color=f'C{i}', linestyle='--', label=f'Restricción {i+1}')
+                ax.axvline(x=x_val, color=f'C{i}', linestyle='--', label=f'Restricción {i+1}')
             elif b != 0:
-                y = (c - a * x) / b
-                ax.plot(x, y, color=f'C{i}', linestyle='--', label=f'Restricción {i+1}')
+                # Verifica que el rango de x sea adecuado para calcular y
+                if a != 0:
+                    y = (c - a * x) / b
+                    ax.plot(x, y, color=f'C{i}', linestyle='--', label=f'Restricción {i+1}')
+                else:
+                    # Para el caso donde b == 0, si a también es 0, no hace sentido graficar
+                    pass
 
         # Dibujar la región factible usando ConvexHull si hay suficientes puntos
         feasible = result['feasible_points']
