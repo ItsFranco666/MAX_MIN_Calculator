@@ -1230,96 +1230,116 @@ class LPSolver:
         if not art_cols:
             return self._solve_simplex_phase2_only(tableau_initial, basic_vars_initial, var_names_full)
 
+        # --- Phase 1 Setup ---
         tableau = copy.deepcopy(tableau_initial)
         basic_vars = copy.deepcopy(basic_vars_initial)
         m, n = tableau.shape
-
         z_row_phase1 = np.zeros(n)
         for a_col_idx in art_cols:
             z_row_phase1[a_col_idx] = -1
         tableau = np.vstack([tableau, z_row_phase1])
-
         for i, b_var_idx in enumerate(basic_vars):
             if b_var_idx in art_cols:
                 tableau[-1, :] += tableau[i, :]
 
+        # --- Phase 1 Iterations ---
         it = 1
         phase1_iterations = [(it, copy.deepcopy(tableau), copy.deepcopy(basic_vars), None, None)]
-        it += 1
         
         while True:
-            obj_coeffs = tableau[-1, :-1]
+            current_iter_data = phase1_iterations[-1]
+            current_tableau = current_iter_data[1]
+            
+            obj_coeffs = current_tableau[-1, :-1]
             enter_candidates = [j for j, v in enumerate(obj_coeffs) if v > self.TOL]
             if not enter_candidates:
-                break
-            
-            enter_col = max(enter_candidates, key=lambda j: obj_coeffs[j])
+                break # Optimal for Phase 1
 
-            ratios = [(tableau[i, -1] / tableau[i, enter_col], i) for i in range(m) if tableau[i, enter_col] > self.TOL]
+            enter_col = max(enter_candidates, key=lambda j: obj_coeffs[j])
+            
+            ratios = [(current_tableau[i, -1] / current_tableau[i, enter_col], i) for i in range(m) if current_tableau[i, enter_col] > self.TOL]
             if not ratios:
+                phase1_iterations[-1] = (current_iter_data[0], current_tableau, current_iter_data[2], enter_col, None)
                 return {"status": "Infactible", "phase1_iterations": phase1_iterations, "phase2_iterations": []}
 
             leave_row = min(ratios, key=lambda x: x[0])[1]
+            
+            # Update current iteration with the pivot info before performing the pivot
+            phase1_iterations[-1] = (current_iter_data[0], current_tableau, current_iter_data[2], enter_col, leave_row)
 
-            self._pivot(tableau, leave_row, enter_col)
-            basic_vars[leave_row] = enter_col
-            phase1_iterations.append((it, copy.deepcopy(tableau), copy.deepcopy(basic_vars), enter_col, leave_row))
+            # Create the state for the *next* iteration
             it += 1
+            next_tableau = copy.deepcopy(current_tableau)
+            next_basic_vars = copy.deepcopy(current_iter_data[2])
+            self._pivot(next_tableau, leave_row, enter_col)
+            next_basic_vars[leave_row] = enter_col
+            phase1_iterations.append((it, next_tableau, next_basic_vars, None, None))
 
-        if abs(tableau[-1, -1]) > self.TOL:
+        # Check for infeasibility
+        if abs(phase1_iterations[-1][1][-1, -1]) > self.TOL:
             return {"status": "Infactible", "phase1_iterations": phase1_iterations, "phase2_iterations": []}
         
-        # Prepare for Phase 2
+        # --- Phase 2 Setup ---
+        final_phase1_vars = phase1_iterations[-1][2]
         original_and_slack_surplus_vars = [idx for idx, name in enumerate(var_names_full) if not name.startswith('a')]
         new_tableau_cols = original_and_slack_surplus_vars + [n-1]
-        tableau_phase2 = tableau[:-1, new_tableau_cols]
+        tableau_phase2 = phase1_iterations[-1][1][:-1, new_tableau_cols] # Get final tableau, remove Z-row, filter columns
         var_names_phase2 = [var_names_full[i] for i in original_and_slack_surplus_vars]
         
         old_to_new_col_map = {old_idx: new_idx for new_idx, old_idx in enumerate(original_and_slack_surplus_vars)}
-        basic_vars_phase2 = [old_to_new_col_map[b] for b in basic_vars if b in old_to_new_col_map]
-
+        basic_vars_phase2 = [old_to_new_col_map[b] for b in final_phase1_vars if b in old_to_new_col_map]
+        
         m_phase2, n_phase2 = tableau_phase2.shape
         obj_row_phase2 = np.zeros(n_phase2)
-        
         for i in range(self.n):
             obj_row_phase2[i] = -self.c[i]
         tableau_phase2 = np.vstack([tableau_phase2, obj_row_phase2])
-
         for i, basic_var_col_idx in enumerate(basic_vars_phase2):
             coeff_in_z = tableau_phase2[-1, basic_var_col_idx]
             if abs(coeff_in_z) > self.TOL:
                 tableau_phase2[-1, :] -= coeff_in_z * tableau_phase2[i, :]
 
-        # Phase 2 iterations
+        # --- Phase 2 Iterations ---
         it = 1
         phase2_iterations = [(it, copy.deepcopy(tableau_phase2), copy.deepcopy(basic_vars_phase2), None, None)]
-        it += 1
         
         while True:
-            obj_coeffs_phase2 = tableau_phase2[-1, :-1]
+            current_iter_data = phase2_iterations[-1]
+            current_tableau = current_iter_data[1]
+
+            obj_coeffs_phase2 = current_tableau[-1, :-1]
             enter_candidates = [j for j, v in enumerate(obj_coeffs_phase2) if v > self.TOL]
             if not enter_candidates:
-                break
-            
-            enter_col = max(enter_candidates, key=lambda j: obj_coeffs_phase2[j])
+                break # Optimal for Phase 2
 
-            ratios = [(tableau_phase2[i, -1] / tableau_phase2[i, enter_col], i) for i in range(m_phase2) if tableau_phase2[i, enter_col] > self.TOL]
+            enter_col = max(enter_candidates, key=lambda j: obj_coeffs_phase2[j])
+            
+            ratios = [(current_tableau[i, -1] / current_tableau[i, enter_col], i) for i in range(m_phase2) if current_tableau[i, enter_col] > self.TOL]
             if not ratios:
+                phase2_iterations[-1] = (current_iter_data[0], current_tableau, current_iter_data[2], enter_col, None)
                 return {"status": "No acotado", "phase1_iterations": phase1_iterations, "phase2_iterations": phase2_iterations}
 
             leave_row = min(ratios, key=lambda x: x[0])[1]
 
-            self._pivot(tableau_phase2, leave_row, enter_col)
-            basic_vars_phase2[leave_row] = enter_col
-            phase2_iterations.append((it, copy.deepcopy(tableau_phase2), copy.deepcopy(basic_vars_phase2), enter_col, leave_row))
+            # Update current iteration with pivot info
+            phase2_iterations[-1] = (current_iter_data[0], current_tableau, current_iter_data[2], enter_col, leave_row)
+
+            # Create next iteration's state
             it += 1
+            next_tableau = copy.deepcopy(current_tableau)
+            next_basic_vars = copy.deepcopy(current_iter_data[2])
+            self._pivot(next_tableau, leave_row, enter_col)
+            next_basic_vars[leave_row] = enter_col
+            phase2_iterations.append((it, next_tableau, next_basic_vars, None, None))
 
-        # Results
+        # --- Results ---
+        final_tableau = phase2_iterations[-1][1]
+        final_basic_vars = phase2_iterations[-1][2]
         solution = {v: 0.0 for v in var_names_phase2}
-        for i, b in enumerate(basic_vars_phase2):
-            solution[var_names_phase2[b]] = tableau_phase2[i, -1]
+        for i, b in enumerate(final_basic_vars):
+            solution[var_names_phase2[b]] = final_tableau[i, -1]
 
-        opt_val = tableau_phase2[-1, -1]
+        opt_val = final_tableau[-1, -1]
         if self.obj_type == "maximize":
             opt_val *= -1
 
@@ -1342,7 +1362,6 @@ class LPSolver:
         for i in range(self.n):
             obj_row_phase2[i] = -self.c[i]
         tableau = np.vstack([tableau, obj_row_phase2])
-        
         for i, b_var_col_idx in enumerate(basic_vars):
             coeff_in_z = tableau[-1, b_var_col_idx]
             if abs(coeff_in_z) > self.TOL:
@@ -1350,32 +1369,44 @@ class LPSolver:
 
         it = 1
         phase2_iterations = [(it, copy.deepcopy(tableau), copy.deepcopy(basic_vars), None, None)]
-        it += 1
         
         while True:
-            obj_coeffs = tableau[-1, :-1]
+            current_iter_data = phase2_iterations[-1]
+            current_tableau = current_iter_data[1]
+
+            obj_coeffs = current_tableau[-1, :-1]
             enter_candidates = [j for j, v in enumerate(obj_coeffs) if v > self.TOL]
             if not enter_candidates:
-                break
-            
+                break # Optimal
+
             enter_col = max(enter_candidates, key=lambda j: obj_coeffs[j])
 
-            ratios = [(tableau[i, -1] / tableau[i, enter_col], i) for i in range(m) if tableau[i, enter_col] > self.TOL]
+            ratios = [(current_tableau[i, -1] / current_tableau[i, enter_col], i) for i in range(m) if current_tableau[i, enter_col] > self.TOL]
             if not ratios:
+                phase2_iterations[-1] = (current_iter_data[0], current_tableau, current_iter_data[2], enter_col, None)
                 return {"status": "No acotado", "phase1_iterations": [], "phase2_iterations": phase2_iterations}
 
             leave_row = min(ratios, key=lambda x: x[0])[1]
+            
+            # Update current iteration with pivot info
+            phase2_iterations[-1] = (current_iter_data[0], current_tableau, current_iter_data[2], enter_col, leave_row)
 
-            self._pivot(tableau, leave_row, enter_col)
-            basic_vars[leave_row] = enter_col
-            phase2_iterations.append((it, copy.deepcopy(tableau), copy.deepcopy(basic_vars), enter_col, leave_row))
+            # Create next iteration's state
             it += 1
-
-        solution = {v: 0.0 for v in var_names_full}
-        for i, b in enumerate(basic_vars):
-            solution[var_names_full[b]] = tableau[i, -1]
+            next_tableau = copy.deepcopy(current_tableau)
+            next_basic_vars = copy.deepcopy(current_iter_data[2])
+            self._pivot(next_tableau, leave_row, enter_col)
+            next_basic_vars[leave_row] = enter_col
+            phase2_iterations.append((it, next_tableau, next_basic_vars, None, None))
         
-        opt_val = tableau[-1, -1]
+        # --- Results ---
+        final_tableau = phase2_iterations[-1][1]
+        final_basic_vars = phase2_iterations[-1][2]
+        solution = {v: 0.0 for v in var_names_full}
+        for i, b in enumerate(final_basic_vars):
+            solution[var_names_full[b]] = final_tableau[i, -1]
+        
+        opt_val = final_tableau[-1, -1]
         if self.obj_type == "maximize":
             opt_val *= -1
 
